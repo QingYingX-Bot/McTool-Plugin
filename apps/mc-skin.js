@@ -16,7 +16,7 @@ function parseBoolean(text) {
 }
 
 function parseSkinArgs(msg, skinConfig) {
-  const raw = String(msg || '').replace(/^#?[Mm][Cc]皮肤渲染/, '').trim();
+  const raw = String(msg || '').replace(/^#?[Mm][Cc]皮肤/, '').trim();
   if (!raw) return null;
 
   const tokens = raw.split(/\s+/).filter(Boolean);
@@ -133,7 +133,7 @@ export class MCToolSkin extends plugin {
       priority: PLUGIN_PRIORITY,
       rule: [
         {
-          reg: '^#?[Mm][Cc]皮肤渲染(?:\\s+.+)?$',
+          reg: '^#?[Mm][Cc]皮肤(?:\\s+.+)?$',
           fnc: 'mcskin'
         }
       ]
@@ -152,7 +152,7 @@ export class MCToolSkin extends plugin {
     const parsed = parseSkinArgs(e.msg, skinConfig);
     if (!parsed) {
       await e.reply(
-        `用法: #mc皮肤渲染 <正版ID> [definition=${skinConfig.definitionDefault}] [transparent=${skinConfig.transparentDefault}]`,
+        `用法: #mc皮肤 <正版ID> [definition=${skinConfig.definitionDefault}] [transparent=${skinConfig.transparentDefault}]`,
         true
       );
       return true;

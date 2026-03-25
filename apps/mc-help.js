@@ -17,7 +17,7 @@ function buildHelpData() {
         { cmd: '#mc帮助', desc: '查看本帮助页面' },
         { cmd: '#mcuuid <正版ID>', desc: '查询玩家 UUID' },
         { cmd: '#mc头像 <正版ID> [2d|3d]', desc: '渲染玩家头像' },
-        { cmd: '#mc皮肤渲染 <正版ID>', desc: '渲染玩家皮肤行走图(GIF/PNG)' },
+        { cmd: '#mc皮肤 <正版ID>', desc: '渲染玩家皮肤行走图(GIF/PNG)' },
         { cmd: '#mcmotd <地址[:端口]> [ja|be]', desc: '查询服务器状态' }
       ]
     },

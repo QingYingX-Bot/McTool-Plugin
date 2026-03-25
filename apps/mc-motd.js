@@ -84,6 +84,9 @@ function parseMotdInput(rawInput, runtimeConfig = getMotdRuntimeConfig()) {
     query: null,
     port: null
   };
+  const meta = {
+    providerExplicit: false
+  };
   const addressParts = [];
 
   for (const token of tokens) {
@@ -96,6 +99,7 @@ function parseMotdInput(rawInput, runtimeConfig = getMotdRuntimeConfig()) {
     const provider = parseProvider(token);
     if (provider) {
       options.provider = provider;
+      meta.providerExplicit = true;
       continue;
     }
 
@@ -127,7 +131,10 @@ function parseMotdInput(rawInput, runtimeConfig = getMotdRuntimeConfig()) {
 
     if (key === 'provider') {
       const providerValue = parseProvider(value);
-      if (providerValue) options.provider = providerValue;
+      if (providerValue) {
+        options.provider = providerValue;
+        meta.providerExplicit = true;
+      }
       continue;
     }
 
@@ -162,7 +169,8 @@ function parseMotdInput(rawInput, runtimeConfig = getMotdRuntimeConfig()) {
 
   return {
     address: addressParts.join(' ').trim() || null,
-    options
+    options,
+    meta
   };
 }
 
@@ -266,6 +274,25 @@ function isStatusObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function hasBackendImage(value) {
+  if (!isStatusObject(value)) return false;
+  const raw = value?.image_b64 ?? value?.imageBase64;
+  return typeof raw === 'string' && raw.trim().length > 0;
+}
+
+function extractBackendImageBase64(value) {
+  if (!isStatusObject(value)) return null;
+  let imageRaw = String(value?.image_b64 ?? value?.imageBase64 ?? '').trim();
+  if (!imageRaw) return null;
+
+  if (imageRaw.includes('base64,')) {
+    imageRaw = imageRaw.slice(imageRaw.indexOf('base64,') + 7);
+  }
+
+  imageRaw = imageRaw.replace(/\s+/g, '');
+  return imageRaw || null;
+}
+
 function normalizeStatusItems(payload, preferredProvider) {
   const items = [];
   const errors = [];
@@ -277,7 +304,7 @@ function normalizeStatusItems(payload, preferredProvider) {
     if (isStatusObject(mcstatus)) items.push({ provider: 'mcstatus', data: mcstatus });
 
     if (!items.length && isStatusObject(payload)) {
-      if (typeof payload?.provider === 'string' || typeof payload?.online === 'boolean') {
+      if (typeof payload?.provider === 'string' || typeof payload?.online === 'boolean' || hasBackendImage(payload)) {
         items.push({ provider: payload.provider || 'both', data: payload });
       }
     }
@@ -293,6 +320,39 @@ function normalizeStatusItems(payload, preferredProvider) {
   }
 
   return { items, errors };
+}
+
+function getProviderPriority(provider) {
+  const normalized = String(provider || '').toLowerCase();
+  if (normalized === 'mcstatus') return 3;
+  if (normalized === 'mcsrvstat') return 2;
+  if (normalized === 'both') return 1;
+  return 0;
+}
+
+function scoreStatusItem(item) {
+  const status = item?.data;
+  let score = 0;
+
+  if (status?.online === true) score += 100;
+  if (status?.online === false) score -= 20;
+
+  score += getProviderPriority(item?.provider) * 10;
+
+  const motdHtml = getMotdHtml(status);
+  if (motdHtml && motdHtml !== 'Unknown MOTD') score += 5;
+
+  const playersOnline = Number(status?.players?.online);
+  if (Number.isFinite(playersOnline) && playersOnline > 0) score += 2;
+
+  return score;
+}
+
+function pickBestStatusItem(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+
+  const sorted = [...items].sort((a, b) => scoreStatusItem(b) - scoreStatusItem(a));
+  return sorted[0] || null;
 }
 
 function extractMotdCommandInput(message) {
@@ -312,14 +372,28 @@ async function renderHtml(filePath) {
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1000, height: 240 });
-    await page.goto(`file://${path.resolve(filePath)}`);
-    const base64 = await page.screenshot({
+    await page.goto(`file://${path.resolve(filePath)}`, { waitUntil: 'networkidle0' });
+    const boxHandle = await page.$('.box');
+    if (boxHandle) {
+      try {
+        return await boxHandle.screenshot({
+          type: 'jpeg',
+          quality: 80,
+          encoding: 'base64',
+          omitBackground: false
+        });
+      } finally {
+        await boxHandle.dispose();
+      }
+    }
+
+    return await page.screenshot({
       type: 'jpeg',
       quality: 80,
       encoding: 'base64',
+      fullPage: true,
       omitBackground: false
     });
-    return base64;
   } finally {
     await browser.close();
   }
@@ -356,17 +430,21 @@ export class MCMotd extends plugin {
     const rawInput = extractMotdCommandInput(e.msg);
     const parsed = parseMotdInput(rawInput, runtimeConfig);
     const serverAddress = parsed.address || null;
+    const shouldSendAllProviders = parsed.options.provider === 'both' && parsed.meta.providerExplicit;
     if (!serverAddress) {
       const defaultEditionText = runtimeConfig.defaultEdition === 'bedrock' ? 'be' : 'java';
       return e.reply(
-        `用法: #mcmotd <地址[:端口]> [ja|be] [provider=both|mcstatus|mcsrvstat] [timeout=5] [query=true] [port=25565]\n默认查询 ${defaultEditionText} + ${runtimeConfig.defaultProvider}；timeout 单位为秒（0.1-30，兼容旧毫秒写法）。`,
+        `用法: #mcmotd <地址[:端口]> [ja|be] \n默认查询 ${defaultEditionText} + ${runtimeConfig.defaultProvider}；timeout 单位为秒（0.1-30，兼容旧毫秒写法）。`,
         true,
         { recallMsg: 30 }
       );
     }
 
     // 发送加载提示
-    const targetText = `${parsed.options.edition}/${parsed.options.provider}`;
+    const providerText = parsed.options.provider === 'both' && !shouldSendAllProviders
+      ? 'auto'
+      : parsed.options.provider;
+    const targetText = `${parsed.options.edition}/${providerText}`;
     const loadingMessage = await e.reply(
       `正在查询 ${serverAddress} (${targetText}), 请稍后...`,
       true
@@ -375,7 +453,12 @@ export class MCMotd extends plugin {
 
     try {
       // 查询服务器状态
-      const { images, errors } = await this.fetchServerStatus(serverAddress, parsed.options, runtimeConfig);
+      const { images, errors } = await this.fetchServerStatus(
+        serverAddress,
+        parsed.options,
+        runtimeConfig,
+        { sendAllProviders: shouldSendAllProviders }
+      );
 
       if (!images.length) {
         const errorText = errors.length ? `\n${errors.join('\n')}` : '';
@@ -391,7 +474,7 @@ export class MCMotd extends plugin {
           }
         }
 
-        if (errors.length || hasSendError) {
+        if ((errors.length || hasSendError) && shouldSendAllProviders) {
           await e.reply(`部分查询失败:\n${errors.join('\n')}`, true, { recallMsg: 60 });
         }
       }
@@ -408,7 +491,12 @@ export class MCMotd extends plugin {
   /**
    * 查询服务器状态并渲染图片
    */
-  async fetchServerStatus(serverAddress, userOptions = {}, runtimeConfig = getMotdRuntimeConfig()) {
+  async fetchServerStatus(
+    serverAddress,
+    userOptions = {},
+    runtimeConfig = getMotdRuntimeConfig(),
+    behavior = {}
+  ) {
     const options = {
       edition: userOptions.edition || runtimeConfig.defaultEdition,
       provider: userOptions.provider || runtimeConfig.defaultProvider,
@@ -435,9 +523,23 @@ export class MCMotd extends plugin {
       return { images, errors };
     }
 
-    for (const item of items) {
+    let itemsToRender = items;
+    const shouldSendAllProviders = behavior?.sendAllProviders === true;
+    if (options.provider === 'both' && !shouldSendAllProviders) {
+      const best = pickBestStatusItem(items);
+      itemsToRender = best ? [best] : [];
+    }
+
+    for (const item of itemsToRender) {
       try {
-        const base64 = await this.renderData(item.data, serverAddress, options.edition, item.provider, runtimeConfig);
+        const backendBase64 = extractBackendImageBase64(item.data);
+        const base64 = backendBase64 || await this.renderData(
+          item.data,
+          serverAddress,
+          options.edition,
+          item.provider,
+          runtimeConfig
+        );
         images.push({ type: item.provider, base64 });
       } catch (err) {
         errors.push(`${providerLabel(item.provider)}: 渲染失败 (${err.message || err})`);
@@ -524,11 +626,15 @@ export class MCMotd extends plugin {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
+    html {
+      background: #262624;
+    }
     body {
       width: 1000px;
       margin: 0;
       font-family: "阿里巴巴普惠体", sans-serif;
       color: #fff;
+      background: #262624;
     }
     .box {
       display: flex;

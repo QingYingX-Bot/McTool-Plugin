@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{helpCssFileUrl}}" />
+</head>
+<body>
+  <div id="container" class="container">
+    <header class="hero">
+      <div class="title">{{title}}</div>
+      <div class="subtitle">{{subtitle}}</div>
+      <div class="meta">生成时间：{{generatedAt}}</div>
+    </header>
+
+    {{each sections group}}
+    <section class="panel">
+      <div class="panel-title">{{group.title}}</div>
+      <div class="group">
+        <div class="cmd-list">
+          {{each group.items item}}
+          <div class="cmd-item">
+            <div class="cmd">{{item.cmd}}</div>
+            <div class="desc">{{item.desc}}</div>
+          </div>
+          {{/each}}
+        </div>
+      </div>
+    </section>
+    {{/each}}
+
+    <footer class="footer">mctool-plugin</footer>
+  </div>
+</body>
+</html>
